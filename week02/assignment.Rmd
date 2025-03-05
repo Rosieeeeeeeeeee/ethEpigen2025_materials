@@ -1,0 +1,131 @@
+---
+title: "assignement"
+output: html_document
+date: "2025-02-28"
+---
+
+```{r}
+suppressPackageStartupMessages({
+  library(AnnotationHub) # to fetch genomes, annotations, etc.
+  library(ensembldb)     # to manipulate ensembl gene annotations
+  library(GenomicRanges) # data structure for genomic ranges 
+  library(epiwraps)      # visualization
+})
+library(ggplot2)
+```
+
+Find and download mouse EnsDb object version 102 (GRCm38)
+
+```{r}
+#search annotationHub for version 102 of mouse EnsDb object for GRCm38
+ah <- AnnotationHub()
+query(ah, c("EnsDb", "102", "GRCm38")) #from this we find AH89211 as the identifier for the dataset we want
+```
+
+```{r}
+#download annotation data
+ensdb <- ah[["AH89211"]]
+ensdb
+```
+
+Find and download mouse genome sequence in TwoBit/2bit format (GRCm38)
+
+```{r}
+#download the annotation data for the mouse genome sequence in TwoBit/2bit format for GRCm38
+query(ah, c("Ensembl", "GRCm38","dna_sm", "2bit")) #identify AH88477 as identifier for the dataset we want
+```
+
+```{r}
+dna_2bit_mouse <- ah[["AH88477"]]
+dna_2bit_mouse #gives the download path
+```
+
+Find and download drosophila melanogaster sequence in TwoBit/2bit format (BDGP6)
+
+```{r}
+#access drosophila melanogaster genome sequence in 2bit format
+query(ah, c("Ensembl", "BDGP6","dna_sm", "2bit")) #identify AH106160 as dataset we want
+
+```
+
+```{r}
+dna_2bit_drosophila <- ah[["AH106160"]]
+dna_2bit_drosophila #gives the download path
+
+```
+
+With mouse EnsDb object - How many different gene IDs are there for protein-coding genes?
+
+```{r}
+#Using mouse EnsDb (GRCm38)
+#How many different ensembl gene IDs are there for protein-coding genes?
+all_genes <- genes(ensdb)
+head(all_genes$gene_biotype) #see the different biotypes
+```
+
+```{r}
+protein_coding <- genes(ensdb, filter=GeneBiotypeFilter("protein_coding")) #filter for protein coding genes
+protein_coding 
+```
+
+```{r}
+length(unique(protein_coding$gene_id))
+```
+
+With mouse EnsDb object - How many gene symbols are there for protein-coding genes?
+
+```{r}
+length(unique(protein_coding$symbol))
+```
+
+Plotting the distribution of the spliced length of protein-coding transcripts
+
+```{r}
+e <- exonsBy(ensdb, by = "tx", filter= TxBiotypeFilter("protein_coding"))#group the exons from the same transcripts together, filtering only for protein coding transcripts
+e
+```
+
+```{r}
+sum_exons_per_tx <- sum(width(e)) #calculate sum of all exons for each transcript
+
+#create histogram
+ggplot(data.frame(sum_exons_per_tx), aes(sum_exons_per_tx)) +
+  geom_histogram(binwidth=30,fill = "black")+
+  scale_x_continuous(limits=c(0, 124000)) +
+  scale_y_continuous(limits = c(0,NA)) +
+    labs(
+    title = "Length distribution of spliced protein-coding transcripts",  # Plot title
+    x = "lengths of transcripts [bp]",  # X-axis title
+    y = " "  # Y-axis title
+  ) +
+  theme(
+    plot.background = element_rect(fill = "white"),  # Change the background of the plot area
+    panel.background = element_rect(fill = "white"),  # Set panel (plot area) background to white
+    axis.text = element_text(color = "black", size = 12),  # Customize axis text
+    axis.title = element_text(color = "black", size = 14),  # Customize axis titles
+    plot.title = element_text(color = "black", size = 16, face = "bold", hjust = 0.5), 
+    axis.line = element_line(color = "black", size = 0.5),  # Black axis lines
+    axis.ticks = element_line(color = "black", size = 0.5) # Customize title
+  )
+```
+
+```{r}
+#adjust histogram
+ggplot(data.frame(sum_exons_per_tx), aes(sum_exons_per_tx)) +
+  geom_histogram(binwidth=30,fill = "black")+
+  coord_cartesian(xlim = c(0, 20000)) + #adjusted the x-axis slightly, meaning we lose a few data points of higher lengths (max somewhere 123000) but overall more digestible
+    labs(
+    title = "Length distribution of spliced protein-coding transcripts",  # Plot title
+    x = "lengths of transcripts [bp]",  # X-axis title
+    y = " "  # Y-axis title
+  ) +
+  theme(
+    plot.background = element_rect(fill = "white"),  # Change the background of the plot area
+    panel.background = element_rect(fill = "white"),  # Set panel (plot area) background to white
+    axis.text = element_text(color = "black", size = 12),  # Customize axis text
+    axis.title = element_text(color = "black", size = 14),  # Customize axis titles
+    plot.title = element_text(color = "black", size = 16, face = "bold", hjust = 0.5), 
+    axis.line = element_line(color = "black", size = 0.5),  # Black axis lines
+    axis.ticks = element_line(color = "black", size = 0.5) # Customize title
+  )
+```
