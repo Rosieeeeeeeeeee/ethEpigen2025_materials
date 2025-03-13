@@ -1,0 +1,136 @@
+---
+title: "assignment"
+output: html_document
+date: "2025-03-08"
+editor_options: 
+  markdown: 
+    wrap: 72
+---
+
+# 1) Downloading Drosophila ChIP-Seq for the protein CTCF
+
+1)  Downloading packages
+
+```{r}
+#get all packages 
+suppressPackageStartupMessages({
+  library(AnnotationHub)
+  library(Rsubread)      # read alignment
+  library(rtracklayer)   # read/write genomic file formats
+  library(Biostrings)    # handling sequences
+  library(Rfastp)        # read QC/trimming - do quality check and trimming
+  library(epiwraps)      # visualization
+})
+BiocManager::install("ETHZ-INS/epiwraps", ref="callpeaks")
+ah <- AnnotationHub()
+install.packages("rtracklayer")
+library(rtracklayer)
+```
+
+2)  Download Drosophila ChIP-Seq data for where CTCF binds
+
+```{r}
+options(timeout=3600) #not important this time, cause have small databases, but for bigger datasets that would automatically stop in r and give an error message, this code increases the timeout-time to prevent this
+
+dir.create("raw") #create directory to save reads to
+download.file("https://www.encodeproject.org/files/ENCFF127RRR/@@download/ENCFF127RRR.fastq.gz", "raw/ctcf.fastq.gz", mode="wb") #downloading the raw ChIP-data (raw reads)
+```
+
+# 2) Process the raw data to obtain BAM-file and peaks
+
+3)  Quality control and trimming
+
+```{r}
+dir.create("rfastp.trimmed") #create directory to save the trimmed reads to
+qc <- lapply(c(ctcf="raw/ctcf.fastq.gz"), FUN=function(x){
+  Rfastp::rfastp(x, thread=8, overrepresentationAnalysis=TRUE,
+                 outputFastq=file.path("rfastp.trimmed/",gsub("\\.fastq\\.gz$","",basename(x))))
+})
+Rfastp::curvePlot(qc$ctcf, curve="content_curves")
+```
+
+4)  Align the reads to the reference genome sequence
+
+```{r}
+query(ah, c("Ensembl", "BDGP6","dna_sm", "2bit")) #download genome sequence in 2bit format -identify AH106160 as most recent dataset
+```
+
+```{r}
+genome <- ah[["AH106160"]] 
+genome
+```
+
+5)  Index the reference genome
+
+```{r}
+dir.create("BDGP6_genome") #create directory that will contain the genome index
+export(import.2bit(genome), "BDGP6_genome/genome.fasta.gz", compress=TRUE) #we write the genome sequence in fasta format
+Rsubread::buildindex("BDGP6_genome/rsubread", reference="BDGP6_genome/genome.fasta.gz") #we build a Rsubread index
+```
+
+6)  Align the trimmed reads to the index of the reference genome
+
+```{r}
+dir.create("aligned") #create directory where BAM-file should be saved to
+align.stats <- Rsubread::align(index="BDGP6_genome/rsubread", type="dna",
+                               readfile1=c("rfastp.trimmed/ctcf_R1.fastq.gz"),
+                               output_file=c("aligned/ctcf"),
+                               nthreads=6, sortReadsByCoordinates=TRUE) #create BAM-file with aligned reads
+```
+
+```{r}
+align.stats
+```
+
+We see in total 3505377 reads were mapped which corresponds to 91.8% of
+the total reads.
+
+7)  Peak calling
+
+```{r, eval = FALSE}
+peaks <- callPeaks(bam="aligned/ctcf.bam") #peak caller from epiwraps package as working on windows device
+```
+
+```{r}
+peaks
+```
+
+We see 2707 peaks were found.
+
+# 3) Report
+
+## How many reads (and what percentage) were mapped:
+
+We see in total 3505377 reads were mapped which corresponds to 91.8% of
+the total reads.
+
+## How many peaks were found:
+
+We see 2707 peaks were found.
+
+# 4) Plot the signal around one of the peaks that is located inside a gene
+
+```{r}
+query(ah, c("Drosophila Melanogaster", "EnsDb")) #get drosophila melanogaster genome annotation data
+ref_genome <- ah[["AH119285"]]
+ref_genome
+```
+
+```{r}
+genes <- genes(ref_genome)
+
+overlaps <- findOverlaps(peaks,genes) #overlap the peaks with genes
+overlaps #in total 1896 pairs of overlaps were found
+```
+
+```{r}
+peaks_on_genes <- peaks[queryHits(overlaps2)] 
+peaks_on_genes
+
+```
+
+```{r}
+plotSignalTracks(list(ctcf="aligned/ctcf.bam", peaks=peaks), region=peaks_on_genes[1],ensdb = ref_genome,
+                 extend=20000, tracks.params=list(ylim=c(0,50))) #plot first peak on a gene
+                 
+```
