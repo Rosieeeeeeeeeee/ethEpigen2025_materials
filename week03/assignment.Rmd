@@ -134,3 +134,5 @@ plotSignalTracks(list(ctcf="aligned/ctcf.bam", peaks=peaks), region=peaks_on_gen
                  extend=20000, tracks.params=list(ylim=c(0,50))) #plot first peak on a gene
                  
 ```
+
+My apologies, I tried several times but I'm afraid my computer didn't manage to knit the file to an html. It always got as far as the peak calling chunk and then stopped.
