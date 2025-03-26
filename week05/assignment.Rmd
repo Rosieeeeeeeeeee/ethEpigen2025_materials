@@ -1,0 +1,158 @@
+---
+title: "assignment week 5"
+output: html_document
+date: "2025-03-21"
+---
+
+```{r}
+suppressPackageStartupMessages({
+  library(AnnotationHub)
+  library(ensembldb)
+  library(GenomicRanges)
+  library(epiwraps)
+  library(rtracklayer)
+  library(ggplot2)
+})
+
+if (!requireNamespace("R.utils", quietly = TRUE)) {
+  install.packages("R.utils")
+}
+library(R.utils)
+library(ggplot2)
+
+```
+
+## Identifying the bivalent domains (H3K27me3 and H3K4me3 overlaps) from mouse embryonic stem cells (ESCs)
+
+1) Download peaks for H3K27me3 and H3K4me3 in embryonic mouse stem cell line Bruce 4 and convert to GRanges object
+
+```{r}
+download.file("https://www.encodeproject.org/files/ENCFF105NKG/@@download/ENCFF105NKG.bed.gz", "H3K27me3_peaks.bed.gz")
+download.file("https://www.encodeproject.org/files/ENCFF247GVM/@@download/ENCFF247GVM.bed.gz", "H3K4me3_peaks.bed.gz")
+
+gunzip("H3K4me3_peaks.bed.gz")
+gunzip("H3K27me3_peaks.bed.gz")
+
+# Convert BED-file to GRanges object
+bed_file <- read.table("H3K4me3_peaks.bed", header = FALSE, nrows = 10)
+print(bed_file)
+```
+
+```{r}
+# Keep only the first three columns (chromosome, start, end) and assign appropriate names
+H3K4me3_peaks <- read.table("H3K4me3_peaks.bed", header = FALSE)[, 1:3]
+colnames(H3K4me3_peaks) <- c("chr", "start", "end")
+
+# Convert to GRanges object
+H3K4me3_peaks_gr <- GRanges(
+  seqnames = H3K4me3_peaks$chr,
+  ranges = IRanges(start = H3K4me3_peaks$start, end = H3K4me3_peaks$end)
+)
+
+# Inspect the GRanges object
+H3K4me3_peaks_gr
+```
+
+```{r}
+# Repeat for H3K27me3
+
+#Look at the BED-file
+bed_file <- read.table("H3K27me3_peaks.bed", header = FALSE, nrows = 10)
+print(bed_file)
+
+```
+
+```{r}
+# Read the BED file and keep only the first three columns (chromosome, start, end) and assign appropriate names
+H3K27me3_peaks <- read.table("H3K27me3_peaks.bed", header = FALSE)[, 1:3]
+colnames(H3K27me3_peaks) <- c("chr", "start", "end")
+
+# Convert to GRanges object
+H3K27me3_peaks_gr <- GRanges(
+  seqnames = H3K27me3_peaks$chr,
+  ranges = IRanges(start = H3K27me3_peaks$start, end = H3K27me3_peaks$end)
+)# Inspect the GRanges object
+H3K27me3_peaks_gr
+```
+2) Overlap H3K27me3 and H3K4me3
+
+```{r}
+hist(width(H3K4me3_peaks_gr), breaks=75)
+```
+```{r}
+hist(width(H3K27me3_peaks_gr), breaks=75)
+```
+```{r}
+# Extract the overlapping regions
+bivalents <- findOverlaps(H3K4me3_peaks_gr, H3K27me3_peaks_gr, type="any")
+
+bivalent_regions <- pintersect(H3K4me3_peaks_gr[from(bivalents)],H3K27me3_peaks_gr[to(bivalents)] )
+bivalent_regions # regions only where both marks are present
+
+
+```
+
+## What happens to these regions upon differentiation?
+
+1) Downloading the H3K4me3 and H3K27me3 peaks from CH12.LX (B-cells) in mus musculus and converting to GRanges objects
+
+```{r}
+download.file("https://www.encodeproject.org/files/ENCFF786KFS/@@download/ENCFF786KFS.bed.gz", "H3K27me3_Bcell_peaks.bed.gz")
+download.file("https://www.encodeproject.org/files/ENCFF496DOC/@@download/ENCFF496DOC.bed.gz", "H3K4me3_Bcell_peaks.bed.gz")
+
+gunzip("H3K4me3_Bcell_peaks.bed.gz")
+gunzip("H3K27me3_Bcell_peaks.bed.gz")
+
+# Read the BED file and keep only the first three columns (chromosome, start, end) and assign appropriate names
+H3K27me3_Bcell_peaks <- read.table("H3K27me3_Bcell_peaks.bed", header = FALSE)[, 1:3]
+colnames(H3K27me3_Bcell_peaks) <- c("chr", "start", "end")
+H3K4me3_Bcell_peaks <- read.table("H3K4me3_Bcell_peaks.bed", header = FALSE)[, 1:3]
+colnames(H3K4me3_Bcell_peaks) <- c("chr", "start", "end")
+
+# Convert to GRanges object
+H3K27me3_Bcell_peaks_gr <- GRanges(
+  seqnames = H3K27me3_Bcell_peaks$chr,
+  ranges = IRanges(start = H3K27me3_Bcell_peaks$start, end = H3K27me3_Bcell_peaks$end))
+H3K4me3_Bcell_peaks_gr <- GRanges(
+  seqnames = H3K4me3_Bcell_peaks$chr,
+  ranges = IRanges(start = H3K4me3_Bcell_peaks$start, end = H3K4me3_Bcell_peaks$end))
+# Inspect the GRanges object
+H3K27me3_Bcell_peaks_gr
+H3K4me3_Bcell_peaks_gr
+```
+
+2) Overlapping the bivalent regions of the mESCs with H3K4me3, H3K27me3 and with both in Bcells
+
+```{r}
+# Overlapping bivalent regions in embryonic cells with H3K4me3 peaks in differentiated B cells
+bivalents_H3K4me3 <- findOverlaps(bivalent_regions, H3K4me3_Bcell_peaks_gr, type="any")
+bivalents_H3K4me3 #number of bivalent regions overlapping H3K4me3
+```
+648 bivalent regions in the mESCs overlap with H3K4me3 domains in the Bcells
+
+```{r}
+# Overlapping bivalent regions in embryonic cells with H3K27me3 peaks in differentiated B cells
+bivalents_H3K27me3 <- findOverlaps(bivalent_regions, H3K27me3_Bcell_peaks_gr, type="any")
+bivalents_H3K27me3 #number of bivalent regions overlapping H3K27me3
+```
+984 bivalent regions in the mESCs overlap with  H3K27me3 domains in the Bcells
+
+```{r}
+# Overlapping bivalent regions in embryonic cells with both histone marks in differentiated B cells
+H3K4me3_H3K27me3 <- findOverlaps(H3K4me3_Bcell_peaks_gr, H3K27me3_Bcell_peaks_gr) # overlap H3K4me3 and H3K27me3 in Bcells
+H3K4me3_H3K27me3_Bcells <-pintersect(H3K4me3_Bcell_peaks_gr[from(H3K4me3_H3K27me3)],H3K27me3_Bcell_peaks_gr[to(H3K4me3_H3K27me3)] ) # select only regions where both marks are present
+H3K4me3_H3K27me3_Bcells
+
+# overlap bivalent regions in mESCs with regions were both marks are present
+bivalents_differentiated <- findOverlaps(bivalent_regions,H3K4me3_H3K27me3_Bcells , type="any")
+bivalents_differentiated
+```
+176 bivalent regions in the mESCs overlap with H3K4me3 and H3K27me3 domains in the Bcells
+
+
+## How many of the mESC bivalent domains are, in the differentiated cell type, overlapping either mark or their combination?
+
+- 648 bivalent regions in the mESCs overlap with H3K4me3 domains in the Bcells
+- 984 bivalent regions in the mESCs overlap with  H3K27me3 domains in the Bcells
+- 176 bivalent regions in the mESCs overlap with H3K4me3 and H3K27me3 domains in the Bcells
+
