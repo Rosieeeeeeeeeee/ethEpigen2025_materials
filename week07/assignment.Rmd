@@ -1,0 +1,136 @@
+---
+title: "Assignment W7"
+output: html_document
+date: "2025-04-07"
+---
+
+```{r}
+suppressPackageStartupMessages({
+  library(epiwraps)
+  library(AnnotationHub)
+  library(MotifDb)
+  #library(memes)
+  library(universalmotif)
+  library(ensembldb)
+  library(ggplot2)
+})
+if (!requireNamespace("AnnotationHub", quietly = TRUE)) {
+    BiocManager::install("AnnotationHub")
+}
+library(AnnotationHub)
+if (!requireNamespace("BiocManager", quietly = TRUE)) install.packages("BiocManager")
+
+# Install Bioconductor packages if not already installed
+BiocManager::install(c("AnnotationHub", "GenomicRanges", "MotifDb", 
+                       "Biostrings", "rtracklayer", "motifmatchr"))
+
+library(rtracklayer)     # Reading/writing genomic files
+BiocManager::install("BSgenome.Mmusculus.UCSC.mm10")
+library(BSgenome.Mmusculus.UCSC.mm10) 
+```
+
+## Download the data
+
+```{r, eval=FALSE}
+download.file("https://ethz-ins.org/content/w7/atac.chr19.bam", "atac.chr19.bam", mode="wb") # download atac-data and save intp "atac.chr19.bam" folder
+download.file("https://ethz-ins.org/content/w7/atac.chr19.bam.bai", "atac.chr19.bam.bai", mode="wb")
+```
+
+# Plotting the insertions (cuts) profile around the high-confidence motifs
+
+## a) for KLF4
+
+Prepare tracks
+
+```{r, eval=FALSE}
+bam <- "atac.chr19.bam" 
+
+# create a track using only nucleosome-free fragments, the number of cuts/insertion sites at each position
+bam2bw(bam, output_bw = "NF_cuts.bw", paired=TRUE, binWidth=1L, type="ends", minFragLength=30, 
+       maxFragLength=120, trim=4L, extend=3L, forceSeqlevelsStyle = "UCSC") # often see dip in center as motif sequence may be blocked by TF and TN5 can't insert there to cut the DNA . match is where ends overlap the motif
+
+
+# create a track using only the (10bp) centers of mono-nucleosome fragments
+bam2bw(bam, output_bw = "mono_centers.bw", paired=TRUE, binWidth=5L, minFragLength=140, trim=4L,
+       maxFragLength=220, type="center", extend=10L, forceSeqlevelsStyle = "UCSC") # center of fragment has to overlap with the motif
+```
+
+Find the KLF4 motif
+
+```{r}
+motif <- MotifDb::query(MotifDb, c("KLF4","Mus"))[[1]]  # get KLF4 motif
+motif_KLF4 <- convert_motifs(motif, class="TFBSTools-PFMatrix")
+```
+
+Get the reference genome
+
+```{r}
+ah <- AnnotationHub(localHub=TRUE)
+AnnotationHub::query(ah, c("Mus Musculus", "2bit")) # find AH14005
+genome <- ah[["AH14005"]] 
+genome
+
+chr19 <- import(genome)["chr19"] # specifically for chromosome 19
+```
+
+Find motif matches on chromosome 19
+
+```{r}
+moi <- motifmatchr::matchMotifs(motif_KLF4, chr19, out="positions", p.cutoff=1e-5)[[1]] # coordinates of the motif on the reference genome (where motif occurs)
+moi <- as(setNames(moi,names(chr19)), "GRanges") # convert to GRanges
+```
+
+Plotting signal around the motif-occurrences
+
+```{r}
+# we prepare the list of tracks
+tracks <- list.files(pattern="bw$") # list of files (in this case nucleosome-free fragments and mono-nucleosome fragements)
+
+# extract signals around the motif occurences
+# we zoom in to 300bp around the motif centers, in windows of 5bp
+sm_KLF4 <- signal2Matrix(tracks, moi, w=5, extend=300) # check where the motifs occurs in specified fragments ->  
+
+# plot the signals:
+plotEnrichedHeatmaps(sm_KLF4, trim=0.95, multiScale = TRUE, axis_name = "0")
+```
+
+```{r}
+KLF4 <- meltSignals(sm_KLF4[,c("NF_cuts", "mono_centers")])
+ggplot(KLF4, aes(position, mean, colour=sample)) + geom_line(size=1.2) # signal quantifies fragment coverage for each position extending outwads from the motif sequence
+```
+
+## b) for MAZ
+
+Find the MAZ motif
+
+```{r}
+motif <- MotifDb::query(MotifDb, c("MAZ","Mus"))[[1]]  # get MAZ motif
+motif_MAZ <- convert_motifs(motif, class="TFBSTools-PFMatrix")
+```
+
+Find motif matches on chromosome 19
+
+```{r}
+moi <- motifmatchr::matchMotifs(motif_MAZ, chr19, out="positions", p.cutoff=1e-5)[[1]] # coordinates of the motif on the reference genome (where motif occurs)
+# convert to GRanges
+moi <- as(setNames(moi,names(chr19)), "GRanges")
+```
+
+Plotting signal around the motif-occurrences
+
+```{r}
+# we prepare the list of tracks
+tracks <- list.files(pattern="bw$") # list of files (in this case nucleosome-free fragments and mono-nucleosome fragements)
+
+# extract signals around the motif occurences
+# we zoom in to 300bp around the motif centers, in windows of 5bp
+sm_MAZ <- signal2Matrix(tracks, moi, w=5, extend=300) # check where the motifs occurs in specified fragments ->  
+
+# plot the signals:
+plotEnrichedHeatmaps(sm_MAZ, trim=0.95, multiScale = TRUE, axis_name = "0")
+```
+
+```{r}
+MAZ <- meltSignals(sm_MAZ[,c("NF_cuts", "mono_centers")])
+ggplot(MAZ, aes(position, mean, colour=sample)) + geom_line(size=1.2) 
+```
