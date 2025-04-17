@@ -1,0 +1,221 @@
+---
+title: "assignment week 8"
+output: html_document
+date: "2025-04-15"
+---
+
+## Preparation
+
+```{r}
+suppressPackageStartupMessages({
+  library(epiwraps)
+  library(motifmatchr)
+  library(MotifDb)
+  library(universalmotif)
+  library(ggplot2)
+  library(SummarizedExperiment) # data structure
+  library(sechm) # for plotting heatmaps from a SummrizedExperiment
+  library(BiocParallel) # for multithreading
+  library(chromVAR) # for motif accessibility estimation
+  library(limma) # for statistical analysis
+})
+library(BSgenome.Mmusculus.UCSC.mm10)
+library(SummarizedExperiment)
+library(GenomicRanges)
+library(GenomeInfoDb)
+BiocManager::install("GenomeInfoDb")
+
+# to control multithreading, unix users can use:
+register(MulticoreParam(4))
+# for windows users, rather one of the following:
+# register(SerialParam()) # this will disable multi-threading
+# register(SnowParam(2))
+```
+
+## Download ATAC-Seq peaks for stressed hippocampi in summarized experiment format
+
+```{r}
+# Download and read the RDS file
+url <- "https://ethz-ins.org/content/mouse_mm38_hippocampus.peakCounts.SE.rds"
+download.file(url, destfile = "hippocampus.peakCounts.SE.rds", mode = "wb")
+unzip("hippocampus.peakCounts.SE.rds")
+se <- readRDS("hippocampus.peakCounts.SE.rds")
+se
+# Adjust naming style to UCSC (to be consistent with the BSgenome)
+seqlevels(rowRanges(se)) # access chromosome names, see now in ensembl format
+original_levels <- seqlevels(rowRanges(se)) # get seqlevels
+mapped_levels <- mapSeqlevels(original_levels, "UCSC") # map the chromosome names from ensembl to UCSC
+valid_levels <- mapped_levels[!is.na(mapped_levels)] # only keep successfully mapped ones (without this always got error before)
+se <- keepSeqlevels(se, names(valid_levels), pruning.mode = "coarse") # apply the mapping to valid chromosomes, remove invalid ones
+se <- renameSeqlevels(se, valid_levels) # rename chromosome names according to UCSC in valid_levels object
+seqlevels(rowRanges(se))
+```
+
+```{r}
+options(timeout=6000)
+download.file("https://ethz-ins.org/content/mouse_mm38_hippocampus.peakCounts.SE.rds", "peaks.rds")
+```
+
+## Perform chromVAR motif analysis
+
+a)  stressed vs ctrl
+
+```{r}
+# find motifs
+motifs <- query(MotifDb, c("HOCOMOCOv11-core", "Hsapiens"))
+# convert to a format motifmatchr can use, and use the gene symbols as names
+motifs <- do.call(TFBSTools::PWMatrixList, setNames(
+           universalmotif::convert_motifs(motifs, class="TFBSTools-PWMatrix"),
+           mcols(motifs)$geneSymbol))
+motifs
+```
+
+```{r}
+colnames(se)
+```
+
+```{r}
+colData(se)$condition <- c("CTRL","CTRL","CTRL", "CTRL", "CTRL", "CTRL", "FSS","FSS","FSS", "FSS", "FSS", "FSS")
+row.names(se) <- as.character(granges(se))
+
+# fetch an assay, all equivalent in this case:
+head(assay(se)) # if I want the first
+head(assays(se)$counts)
+head(assay(se, "counts"))
+```
+
+```{r}
+seqlevels(BSgenome.Mmusculus.UCSC.mm10) # in UCSC style
+
+```
+
+```{r}
+se <- chromVAR::addGCBias(se, genome=BSgenome.Mmusculus.UCSC.mm10) # now both in UCSC-style
+rowData(se)
+hist(rowData(se)$bias)
+```
+
+```{r}
+# we find which peaks contain which motifs
+# we don't use `out="positions"` here
+moi <- motifmatchr::matchMotifs(motifs, subject=se, genome=BSgenome.Mmusculus.UCSC.mm10)
+head(assay(moi))
+```
+
+```{r}
+# ensure reproducibility
+set.seed(1234)
+# for each peak, we identify similar peaks as background
+bg <- chromVAR::getBackgroundPeaks(se, niterations=500)
+# for each motif, we computed per-sample deviations relative to the background
+dev <- chromVAR::computeDeviations(object = se, annotations=moi,
+                                   background_peaks=bg)
+```
+
+```{r}
+dev$condition
+# if needed, we can specify the baseline condition, by default it's the first in alphabetical order
+dev$condition <- factor(dev$condition)
+dev$condition <- relevel(dev$condition, "CTRL")
+mm <- model.matrix(~dev$condition)
+# equivalent, but with names that are cleaner:
+mm <- model.matrix(~condition, data=as.data.frame(colData(dev)))
+```
+
+```{r}
+fit <- limma::eBayes(limma::lmFit(object = assays(dev)$z, design = mm))
+# we select, from the columns of model.matrix `mm`, the coefficient we want to test:
+res <- as.data.frame(limma::topTable(fit, coef="conditionFSS", number = Inf))
+head(res)
+
+res$TF <- row.names(res)
+ggplot(res, aes(logFC, -log10(adj.P.Val), label=TF)) + geom_text()
+
+```
+
+```{r}
+metadata(dev)$anno_colors <- list(condition=c(CTRL="lightgrey", FSS="darkred"))
+sechm::sechm(dev, features = head(row.names(res)), assayName="z", top_annotation = c("condition", "depth"))
+```
+
+b)  males vs females
+
+```{r}
+# filter bam files based on gender given in colnames
+colData(se)
+gender <- gsub(".*_(female|male)_.*", "\\1", colnames(se)) # Extract gender from colnames
+colData(se)$gender <- gender # Add gender as a new column to colData
+se_female <- se[, colData(se)$gender == "female"] # filter for female 
+se_male <- se[, colData(se)$gender == "male"] # filter for male
+colData(se_female) # check it worked, should now be additional metadata column containing gender
+colData(se_male)
+```
+
+```{r}
+colData(se)$gender <- c("male","male","male", "male", "male", "male","female","female","female", "female", "female", "female")
+row.names(se) <- as.character(granges(se))
+
+# fetch an assay, all equivalent in this case:
+head(assay(se)) # if I want the first
+head(assays(se)$counts)
+head(assay(se, "counts"))
+```
+
+```{r}
+seqlevels(BSgenome.Mmusculus.UCSC.mm10) # in UCSC style
+
+```
+
+```{r}
+se <- chromVAR::addGCBias(se, genome=BSgenome.Mmusculus.UCSC.mm10) # now both in UCSC-style
+rowData(se)
+hist(rowData(se)$bias)
+```
+
+```{r}
+moi <- motifmatchr::matchMotifs(motifs, subject=se, genome=BSgenome.Mmusculus.UCSC.mm10)
+head(assay(moi))
+```
+
+```{r}
+# ensure reproducibility
+set.seed(1234)
+# for each peak, we identify similar peaks as background
+bg <- chromVAR::getBackgroundPeaks(se, niterations=500)
+# for each motif, we computed per-sample deviations relative to the background
+dev <- chromVAR::computeDeviations(object = se, annotations=moi,
+                                   background_peaks=bg)
+```
+
+```{r}
+dev$gender
+# if needed, we can specify the baseline condition, by default it's the first in alphabetical order
+dev$gender <- factor(dev$gender)
+dev$gender <- relevel(dev$gender, "male")
+mm <- model.matrix(~dev$gender)
+# equivalent, but with names that are cleaner:
+mm <- model.matrix(~gender, data=as.data.frame(colData(dev)))
+```
+
+```{r}
+fit <- limma::eBayes(limma::lmFit(object = assays(dev)$z, design = mm))
+# we select, from the columns of model.matrix `mm`, the coefficient we want to test:
+
+res_gender <- as.data.frame(limma::topTable(fit, coef="genderfemale", number = Inf)) #
+head(res_gender)
+
+res_gender <- res_gender[!duplicated(res_gender$ID), ]#gets rid of duplicates
+row.names(res_gender) <- res_gender$ID
+
+res_gender$TF <- row.names(res_gender) 
+ggplot(res_gender, aes(logFC, -log10(adj.P.Val), label=TF)) # tried adjusting the scales, but this didn't seem to work. Was not sure how to correct for this.
+```
+
+```{r}
+metadata(dev)$anno_colors <- list(condition=c(female="lightgrey", male="darkred")) 
+sechm::sechm(dev, features = head(row.names(res_gender)), assayName="z", top_annotation = c("gender", "depth")) 
+```
+I'm afraid it stopped again when I tried to render it to a markdown, so am only able to upload markdown. Apologies!
+
+```{r}
+```
