@@ -1,0 +1,233 @@
+---
+title: "Assignment week 10"
+output: html_document
+date: "2025-05-13"
+---
+
+## 1) Preparation
+
+```{r}
+suppressPackageStartupMessages({
+  library(epiwraps)
+  library(AnnotationHub)
+  library(MotifDb)
+  #library(memes)
+  library(universalmotif)
+  library(ensembldb)
+  library(ggplot2)
+})
+
+library(rtracklayer)
+suppressPackageStartupMessages({
+  library(GenomicRanges)
+  library(epiwraps)
+  library(ggplot2)
+  library(rGREAT) # Gene Ontology enrichment among genomic regions
+})
+
+
+BiocManager::install("TxDb.Hsapiens.UCSC.hg38.knownGene")
+library(GenomicRanges)
+library(GenomeInfoDb)
+library(TxDb.Hsapiens.UCSC.hg38.knownGene)
+devtools::install_github("PoisonAlien/trackplot")
+library(trackplot)
+library(data.table)
+library(ggplot2)
+if (!requireNamespace("GenomicRanges", quietly = TRUE)) {
+  install.packages("BiocManager")
+  BiocManager::install("GenomicRanges")
+}
+
+library(GenomicRanges)
+library(motifmatchr)
+```
+
+## 2) Downloading the data
+
+```{r}
+options(timeout = 6000)
+download.file("https://ethz-ins.org/content/w10.assignment.zip", "w10.practical.zip") # for hg38 (38th versoin of human genome)
+unzip("w10.practical.zip") 
+list.files()
+
+```
+
+## 3) Prepare regions and tracks
+
+```{r}
+tracks <- list.files(pattern="bw$")
+peaks <- list.files(pattern="bed$")
+# we first import the peaks
+peaks <- lapply(peaks, rtracklayer::import.bed)
+ # we'll focus on the high-quality peaks
+peaks <- lapply(peaks, FUN=function(x) x[x$score>800])
+# we get the union of non-redundant regions
+regions <- reduce(unlist(GRangesList(peaks)))
+```
+
+## 4) Plot
+
+```{r}
+# Check what chromosomes the regions are on
+unique(seqnames(regions))
+# Get chromosome lengths
+chrom_lengths <- seqlengths(TxDb.Hsapiens.UCSC.hg38.knownGene)
+# Restrict to just the chromosomes we have
+chrom_lengths <- chrom_lengths[names(chrom_lengths) %in% seqlevels(regions)]
+# Apply to the regions object
+seqlengths(regions) <- chrom_lengths
+
+
+seqlengths(regions) <- chrom_lengths["chr1"]
+
+
+
+ese <- signal2Matrix(tracks, regions, extend=2000)
+plotEnrichedHeatmaps(ese)
+
+```
+
+```{r}
+ese2 <- ese[1:1000,]
+plotEnrichedHeatmaps(ese2, cluster_rows = TRUE, show_row_dend=TRUE )
+```
+
+## 5) Clustering
+
+We cluster based on binding signal of the transcription factors
+
+```{r}
+set.seed(123)  # to ensure that it gives the same results every time
+cl <- clusterSignalMatrices(ese, k=4) # initial clustering with 4 clusters
+table(cl)
+
+```
+
+```{r}
+head(cl)
+
+```
+
+```{r}
+length(cl)
+
+```
+
+```{r}
+length(regions)
+
+```
+
+```{r}
+# to make sure the cluster labels stay associated with the corresponding regions/rows
+# even if we manipulate the object, put them inside the rowData of the object:
+rowData(ese)$cluster <- cl
+head(rowData(ese))
+```
+
+## 6) Plotting the clusters
+
+```{r}
+plotEnrichedHeatmaps(ese, row_split=rowData(ese)$cluster, 
+                     colors=c("white","darkred"))
+```
+
+```{r}
+# adding colours
+mycolors <- c("1"="red", "2"="blue", "3"="darkgreen", "4"="black")
+plotEnrichedHeatmaps(ese, row_split="cluster", mean_color=mycolors, colors=c("white","darkred"))
+```
+
+```{r}
+# trying different number of clusters
+cl2 <- clusterSignalMatrices(ese, k=2:10)
+ggplot(cl2$varExplained, aes(k, varExplained)) + geom_line() # elbow where plateau begins may be around 9, but also maybe 5 or 6 -slightly unsure here
+```
+
+```{r}
+# plotting the averages
+d <- meltSignals(ese, splitBy=cl)
+ggplot(d, aes(position, mean, colour=sample)) + geom_line(size=1.2) + facet_wrap(~split)
+```
+
+```{r}
+# Clustering using relative signal instead:
+cl <- clusterSignalMatrices(ese, k=6, scaleRows = TRUE) # was unsure on number of clusters to go with so compromised in middle with 6 
+
+```
+
+```{r}
+d <- meltSignals(ese, splitBy=cl)
+ggplot(d, aes(position, mean, colour=sample)) + geom_line() + facet_wrap(~split)
+
+```
+
+```{r}
+plotEnrichedHeatmaps(ese, row_split = cl, scale_rows = "global")
+```
+
+## 7) GO-Enrichment analysis
+
+To check whether certain genes associated with given biological processes occur more than expected in our clusters
+
+```{r}
+# we first split the regions by cluster:
+rowData(ese)$cluster <- cl #adjust from above where before was 4 clusters and now is 6
+split_regions <- split(rowRanges(ese), rowData(ese)$cluster)
+lengths(split_regions)
+```
+
+```{r}
+# inspecting each cluster
+res_1 <- great(split_regions[["1"]], gene_sets="GO:BP", tss_source="hg38", 
+             background=regions, cores=2)
+bp_1 <- getEnrichmentTables(res_1)
+head(bp_1)
+```
+
+```{r}
+res_2 <- great(split_regions[["2"]], gene_sets="GO:BP", tss_source="hg38", 
+             background=regions, cores=2)
+bp_2 <- getEnrichmentTables(res_2)
+head(bp_2)
+```
+
+```{r}
+res_3 <- great(split_regions[["3"]], gene_sets="GO:BP", tss_source="hg38", 
+             background=regions, cores=2)
+bp_3 <- getEnrichmentTables(res_3)
+head(bp_3)
+```
+
+```{r}
+res_4 <- great(split_regions[["4"]], gene_sets="GO:BP", tss_source="hg38", 
+             background=regions, cores=2)
+bp_4 <- getEnrichmentTables(res_4)
+head(bp_4)
+```
+
+```{r}
+print(split_regions[["5"]])
+sapply(split_regions, length)
+
+res_5 <- great(split_regions[["5"]], gene_sets="GO:BP", tss_source="hg38", 
+             background=regions, cores=2)
+bp_5 <- getEnrichmentTables(res_5)
+head(bp_5)
+
+```
+
+```{r}
+res_6 <- great(split_regions[["6"]], gene_sets="GO:BP", tss_source="hg38", 
+             background=regions, cores=2)
+bp_6 <- getEnrichmentTables(res_6)
+head(bp_6)
+```
+
+## Interpretation of gene ontology enrichment analysis:
+
+-   Regulatory elements of genes in cluster 1 are likely bound by creb3 and to a lesser extent by creb1 and finally creb3L1. This cluster shows a strong significant enrichment (even after multiple testing correction an adjusted p-value of 0.000000936) for genes associated with cell communication and signaling. More specifically, genes associated with processes like (cellular) response to stimulus, signal transduction and multicellular organismal processes are also significantly enriched. This suggests that particularly creb3 may be involved in communication and signaling between cells by responding to incoming stimuli and forwarding this signal to other cells.
+-   Creb1 and creb3L1 seem to co-localize to regulatory elements in cluster 2 and 3 and may jointly regulate genes in these clusters. In cluster 2 there seems to be a moderate enrichment for genes associated with protein stability and localization, sulfur biosynthesis and metabolism and fibroblast proliferation. However, all the adjusted p-values are non-significant. However, especially genes associated with protein localization, sulfur biosynthesis and fibroblast proliferation have an elevated fold enrichment (all appearing at least twice more than expected based on the background) suggesting this may still be biologically relevant. In cluster 3 we also see no significant adjusted p-values, however genes associated with (purine) (ribo)nucleoside triphosphate biosynthesis and the regulation of intrinsic apoptotic singaling pathways occur also at least twice as often as we would expect based on the background, meaning this too may still be a biologically relevant finding.
+-   In cluster 4 where creb1 seems to bind, there is a moderate enrichment for genes associated with the development of the endocrine and nervous system as well as cellular development and differentiation. This suggests creb1 may bind regulatory elements like enhancers or promoters of regions involved in development. Enrichment of monosaccaride transmembrane transprot and carbohydrate transport further suggests a possible involvement of the transcription factor in regulating such transport functions. Further, creb1 seems to localize to elements near genes associated with especially cellular component assembly (significant adjusted p-value of 0.0438), suggesting a putative involvement of the transcription factor in this process also.
+-   Finally, we see localization of mainly creb3L1 and creb3 near genes in cluster 6 (but also creb1 slightly). While we see no significant enrichment in this cluster when considering multiple testing, there is increased fold enrichment for genes involved in tRNA processing, modification and metabolism as well as membrane polarization and RNA modification, suggesting a possible involvement of mainly creb3L1 and creb3 in jointly regulating these processes.
