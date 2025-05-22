@@ -1,0 +1,106 @@
+---
+title: "Assignment week 11"
+output: html_document
+date: "2025-05-19"
+---
+
+## Plot a heatmap of the methylation levels of genes in the 20 most significant differentially methylated regions (DMRs) on chromosome 1 (Chr1)
+
+1)  Preparation and downloading data
+
+```{r setup}
+suppressPackageStartupMessages({
+  library(epiwraps)
+  library(ggplot2)
+  library(AnnotationHub)
+  library(ensembldb)
+  library(edgeR)
+  library(rtracklayer)
+  library(BiocParallel)
+  library(bsseq)   # Class and tools to analyze bisulfite sequencing data at CpG-level
+  library(DMRcate) # Identification of differentially-methylated regions
+})
+if (!requireNamespace("BiocManager", quietly = TRUE))
+    install.packages("BiocManager")
+
+BiocManager::install("rGREAT")
+library(rGREAT)
+#install.packages("pheatmap")
+library(pheatmap)
+```
+
+2)  Differential Methylation Testing / Differential analysis of methylation
+
+```{r testing}
+bs <- readRDS("ESC_astrocytes_BSseq.rds")
+bs
+class(bs)
+assayNames(bs) # has two different assays and their ratio gives us the info for the coverage of these cells
+
+bs <- bs[rowSums(assay(bs,"Cov")>0)==ncol(bs),] # remove CpGs that have 0 coverage
+
+design <- model.matrix(~celltype, data=pData(bs)) 
+
+
+methdesign <- modelMatrixMeth(design) # converts our design matrix for methylation data 
+methdesign
+bs <- BSmooth(bs, BPPARAM=MulticoreParam(4, progress=TRUE)) # smoothing - helps us estimate the methylation of CpGs where we have unclear data, based on assumption the methylation of a nucleotide depends on the surrounding regions
+bs
+```
+
+3)  Filtering for the top 20 most significant regions on chromosome 1
+
+```{r filtering}
+dmrs <- readRDS("dmr.rds")
+dmrs
+class(dmrs)
+
+# filter for chromosome 1
+dmrs_chr1 <- dmrs[seqnames(dmrs) == "chr1"]
+
+# filter just for the significant ones based on HMFDR (hierarchical multiple-testing corrected false discovery rate)
+sig_dmrs_chr1 <- dmrs_chr1[dmrs_chr1$HMFDR < 0.05]
+sig_dmrs_chr1
+
+# Rank by FDR
+ord <- order(mcols(sig_dmrs_chr1)$min_smoothed_fdr)
+
+# Select top 20 most significant
+top20_dmrs_chr1 <- sig_dmrs_chr1[ord[1:20]]
+top20_dmrs_chr1 # this gives us the genes that overlap with the top 20 most differentially methylated regions
+top20_clean <- top20_dmrs_chr1[!is.na(mcols(top20_dmrs_chr1)$overlapping.genes)] 
+top20_clean
+mcols(top20_clean)$overlapping.genes # these are the genes for which we want to get their methylation data
+```
+
+3)  Get the methylation data for the genes in the top 20 DMRs
+
+```{r methyl}
+met_top20 <- bsseq::getMeth(bs, regions=top20_clean, what="perRegion") # perRegion gives overall per region, not for each individual CpG
+colnames(met_top20) <- colnames(bs)
+rownames(met_top20) <- top20_clean$symbol
+
+# we plot their average methylation ratio across samples
+pheatmap(met_top20, name="top20\nmethylation")
+```
+
+## Run an enrichment analysis (rGREAT) of the significant DMRs from the practical against the entire genome
+
+```{r enrichment}
+# get all significant DMRs
+sig_dmrs <- dmrs[dmrs$HMFDR < 0.05]
+sig_dmrs
+str(sig_dmrs)
+
+# Run gene ontology enrichment
+enriched <- great(sig_dmrs, gene_sets="GO:BP", tss_source="hg19", 
+             background=granges(bs), cores=2) # change to hg19
+bp <- getEnrichmentTables(enriched)
+head(bp)
+```
+
+## What is the enrichment analysis testing and what are the results?
+
+The differentially methylated regions between embryonic stem cells and astrocytes are regions where the two cell types are differentially regulated by methylation. These differences may reflect epigenetic changes - specifically methylation - related to the differentiation of embryonic stem cells to astrocytes. It can be indicative of which regions are susceptible to epigenetic reprogramming during the differentiation process. The enrichment analysis tests whether certain biological processes (gene ontology) are statistically overrepresented in a set of genes associated with significant DMRs compared to the background of the whole genome. The analysis revealed that DMRs were significantly enriched near genes involved in detoxification processes and mitochondrial respiration, such as "hydrogen peroxide metabolic process", "aerobic respiration", and "oxidative phosphorylation". All show increased fold enrichment and statistically significant p-values, even if for the adjusted p-value only "hydrogen peroxide meabolic process" is statistically enriched. This suggests that epigenetic regulation via DNA methylation may play a role in the metabolic reprogramming and oxidative stress response associated with neural differentiation.
+
+
