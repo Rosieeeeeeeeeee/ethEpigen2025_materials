@@ -1,0 +1,141 @@
+---
+title: "Assignment week 12"
+output: html_document
+date: "2025-05-28"
+---
+
+1) Preparaton: loading packages and downloading peaks and interactions
+
+```{r, prep}
+library(GenomicRanges)
+library(rtracklayer)
+library(org.Hs.eg.db)
+library(TxDb.Hsapiens.UCSC.hg38.knownGene)
+library(ggplot2)
+
+# p300 peaks from ENCODE
+download.file("https://www.encodeproject.org/files/ENCFF165QGE/@@download/ENCFF165QGE.bed.gz", "p300.bed.gz")
+peaks <- import("p300.bed.gz", format = "narrowPeak")
+seqlevelsStyle(peaks) <- "UCSC"
+
+# Load Salviato distal enhancer–target predictions
+salviato_gr <- readRDS(url("https://ethz-ins.org/content/hg38.SalviatoDistalEnhancerTargets.GR.rds"))
+seqlevelsStyle(salviato_gr) <- "UCSC"
+```
+2) Overlapping the p300 peaks with the distal enhancers
+
+```{r, overlaps}
+ov <- findOverlaps(peaks, salviato_gr)
+peaks_with_targets <- peaks[queryHits(ov)]
+targets <- salviato_gr[subjectHits(ov)]
+
+# Attach predicted gene symbol(s)
+mcols(peaks_with_targets)$target_symbol <- targets$target
+```
+
+3) Obtaining the TSS positions
+
+```{r, positions}
+# Get TSSs from TxDb
+tss_all <- promoters(genes(TxDb.Hsapiens.UCSC.hg38.knownGene), upstream = 0, downstream = 1)
+
+# Convert Entrez IDs → gene symbols
+tss_all$gene_symbol <- mapIds(
+  org.Hs.eg.db,
+  keys = names(tss_all),
+  column = "SYMBOL",
+  keytype = "ENTREZID"
+)
+```
+4) Matching predicted target symbols to TSSs
+
+```{r, matching}
+flat_peaks <- rep(peaks_with_targets, lengths(peaks_with_targets$target_symbol))
+flat_peaks$target_symbol <- unlist(peaks_with_targets$target_symbol)
+
+# Match gene symbol to TSS
+tss_match_idx <- match(flat_peaks$target_symbol, tss_all$gene_symbol)
+valid <- !is.na(tss_match_idx)
+flat_peaks <- flat_peaks[valid]
+matched_tss <- tss_all[tss_match_idx[valid]]
+```
+
+5) Determine if the peaks are upstream or downstream of the TSS
+
+```{r, stream}
+midpoint <- start(flat_peaks) + width(flat_peaks) / 2
+tss_pos <- start(matched_tss)
+strand_info <- as.character(strand(matched_tss))
+
+is_upstream <- ifelse(strand_info == "+", midpoint < tss_pos, midpoint > tss_pos)
+
+upstream_peaks <- flat_peaks[is_upstream]
+downstream_peaks <- flat_peaks[!is_upstream]
+```
+
+6) Comparing the target gene to the nearest gene by distance
+
+```{r, compare}
+# Find nearest gene (symbol) to each peak
+nearest_idx <- nearest(flat_peaks, tss_all)
+nearest_symbols <- tss_all$gene_symbol[nearest_idx]
+
+predicted_symbols <- flat_peaks$target_symbol
+
+# Valid comparisons
+valid2 <- !is.na(predicted_symbols) & !is.na(nearest_symbols)
+
+# Calculate proportions
+prop_upstream <- mean(predicted_symbols[valid2 & is_upstream] == nearest_symbols[valid2 & is_upstream])
+prop_downstream <- mean(predicted_symbols[valid2 & !is_upstream] == nearest_symbols[valid2 & !is_upstream])
+
+prop_upstream
+prop_downstream
+```
+
+
+
+
+
+
+## In what proportion of the cases the predicted target is the closest gene?
+
+- Among the upstream genes: 0.04659794 (ca. 4.9%)
+- Among the downstream genes: 0.05375925 (ca. 5.3%)
+
+## Plot a distribution of the distances between the peak and the (TSS of the) predicted target gene
+
+7) plotting the distance distribution to target TSS
+
+```{r, plotting}
+distances <- abs(midpoint - tss_pos)
+df <- data.frame(
+  distance = distances,
+  direction = ifelse(is_upstream, "Upstream", "Downstream")
+)
+
+ggplot(df, aes(x = distance, fill = direction)) +
+  geom_histogram(bins = 50, alpha = 0.7, position = "identity") +
+  scale_x_log10() +
+  theme_minimal() +
+  labs(title = "Distance to predicted target gene TSS", x = "Distance (bp, log scale)", y = "Number of peaks")
+```
+
+
+```{r}
+```
+
+
+```{r}
+```
+
+
+```{r}
+```
+
+
+```{r}
+```
+
+
+```{r}
